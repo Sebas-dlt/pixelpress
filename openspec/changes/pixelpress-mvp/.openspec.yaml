@@ -1,0 +1,4 @@
+schema: spec-driven
+created: 2026-09-28
+goal: Producto web estatico listo para Vercel que convierta PDF a Word y Word a
+  PDF sin enviar archivos a ningun servidor

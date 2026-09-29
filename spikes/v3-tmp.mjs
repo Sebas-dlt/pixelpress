@@ -1,0 +1,18 @@
+import { readFileSync, writeFileSync, appendFileSync } from "node:fs";
+import { LibreOfficeConverter } from "@matbee/libreoffice-converter";
+const WASM_DIR = "/home/sebas/pixelpress/node_modules/@matbee/libreoffice-converter/wasm/";
+const LOG = process.argv[2] || "/tmp/opencode/v3.log";
+writeFileSync(LOG, "");
+const t0 = Date.now();
+const emit = (...a) => appendFileSync(LOG, `[+${Date.now()-t0}ms] ` + a.map(x=>typeof x==="string"?x:JSON.stringify(x)).join(" ") + "\n");
+console.log = emit; console.error = emit;
+const bytes = readFileSync("/home/sebas/pixelpress/spikes/out/fixture.docx");
+import wasmLoader from "/home/sebas/pixelpress/node_modules/@matbee/libreoffice-converter/wasm/loader.cjs";
+const conv = new LibreOfficeConverter({ wasmLoader, wasmPath: WASM_DIR, verbose: true });
+await conv.initialize();
+emit("--- initialize done, converting ---");
+const r = await conv.convert(bytes, { outputFormat: "pdf", filename: "fixture.docx" });
+emit("--- convert done ---");
+writeFileSync("/tmp/opencode/v3-out.pdf", r.data);
+process.stdout.write("done in " + (Date.now()-t0) + "ms\n");
+process.exit(0);

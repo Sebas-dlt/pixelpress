@@ -1,0 +1,41 @@
+@import "tailwindcss";
+
+@theme {
+  --color-ink: oklch(21.9% 0.038 277);
+  --color-cream: oklch(97.9% 0.017 84);
+  --color-paper: oklch(100% 0 0);
+  --color-brand: oklch(65.5% 0.225 33);
+  /* brand aclarado para texto pequeño y botones: #fc441e no llega a 4.5:1 */
+  --color-brand-ink: #cf3810;
+  --color-sun: oklch(85.1% 0.152 85);
+  --color-mint: oklch(70.5% 0.128 182);
+  --color-grape: oklch(54.1% 0.281 293);
+  --color-muted: oklch(95.5% 0.015 84);
+  --color-muted-foreground: oklch(48% 0.03 277);
+  --color-destructive: oklch(58% 0.222 25);
+  --font-display: "Baloo 2", system-ui, sans-serif;
+  --font-body: "Nunito", system-ui, sans-serif;
+  --radius-card: 1rem;
+}
+
+@layer base {
+  html {
+    scroll-behavior: smooth;
+  }
+  body {
+    background: var(--color-cream);
+    color: var(--color-ink);
+    font-family: var(--font-body);
+    -webkit-font-smoothing: antialiased;
+  }
+  h1,
+  h2,
+  h3,
+  h4 {
+    font-family: var(--font-display);
+  }
+  :focus-visible {
+    outline: 3px solid var(--color-brand);
+    outline-offset: 2px;
+  }
+}
