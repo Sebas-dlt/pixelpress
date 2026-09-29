@@ -38,6 +38,6 @@
 ## 6. Repositorio y despliegue
 
 - [x] 6.1 `git init`, LICENSE AGPL-3.0, README (qué hace, privacidad, límites)
-- [ ] 6.2 Push a GitHub (repo público)
+- [x] 6.2 Push a GitHub (repo público)
 - [x] 6.3 `vercel.json`: headers COOP/COEP, caché inmutable de `/assets` y WASM
 - [ ] 6.4 Deploy en Vercel Hobby + smoke test E2E en el dominio
