@@ -39,3 +39,25 @@
     outline-offset: 2px;
   }
 }
+
+@layer components {
+  /* botón con empuje: sombra sólida que se hunde al pulsar */
+  .btn-push {
+    box-shadow: 0 8px 0 0 var(--color-ink);
+    transition: transform 0.12s ease, box-shadow 0.12s ease;
+  }
+  .btn-push:hover {
+    transform: translateY(2px);
+    box-shadow: 0 6px 0 0 var(--color-ink);
+  }
+  .btn-push:active {
+    transform: translateY(8px);
+    box-shadow: 0 0 0 0 var(--color-ink);
+  }
+  .card-pop {
+    box-shadow: 6px 6px 0 0 var(--color-ink);
+  }
+  .card-pop-lg {
+    box-shadow: 10px 10px 0 0 var(--color-ink);
+  }
+}
