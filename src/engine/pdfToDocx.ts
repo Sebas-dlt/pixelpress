@@ -17,6 +17,7 @@ import {
   TableLayoutType,
   WidthType,
   LineRuleType,
+  VerticalAlignTable,
 } from "docx";
 
 export class ScannedPdfError extends Error {}
@@ -39,6 +40,7 @@ type PChar = {
 };
 
 type PLine = { bbox: Rect; chars: PChar[] };
+type Entry = { line: PLine; block: PBlock };
 type PBlock = { lines: PLine[] };
 
 type Stroke = {
@@ -65,11 +67,11 @@ type Region = {
   fills: Fill[];
 };
 
-type CellSeg = { y: number; chars: PChar[] };
+type CellSeg = { y: number; x0: number; x1: number; chars: PChar[] };
 type CellData = CellSeg[];
 
 type Item = {
-  kind: "para" | "image" | "table";
+  kind: "para" | "image" | "table" | "cols";
   page: number;
   y0: number;
   y1: number;
@@ -77,9 +79,15 @@ type Item = {
   rows?: Row[];
   ind?: number;
   image?: PImage;
+  float?: boolean;
   region?: Region;
   cells?: CellData[][];
   align?: Alignment;
+  line?: number;
+  padTop?: number;
+  padBot?: number;
+  before?: number;
+  columns?: { left: number; right?: number; items: Item[] }[];
 };
 
 type PageData = {
@@ -97,7 +105,7 @@ const TOL = 3;
 const CLUSTER_TOL = 1.5;
 
 const FONT_MAP: Record<string, string> = {
-  librationsans: "Arial",
+  liberationsans: "Arial",
   liberationserif: "Times New Roman",
   liberationmono: "Courier New",
   carlito: "Calibri",
@@ -497,12 +505,6 @@ function alignRect(x0: number, x1: number, left: number, right: number): Alignme
   return AlignmentType.LEFT;
 }
 
-function pageTextExtents(pg: PageData): { left: number; right: number } {
-  const xs = pg.blocks.flatMap((b) => b.lines.filter((l) => l.chars.length).map((l) => [l.bbox[0], l.bbox[2]]));
-  if (xs.length === 0) return { left: pg.bounds[0], right: pg.bounds[2] };
-  return { left: Math.min(...xs.map((p) => p[0])), right: Math.max(...xs.map((p) => p[1])) };
-}
-
 export async function pdfToDocx(pdfBytes: Uint8Array): Promise<Uint8Array> {
   const doc = mupdf.Document.openDocument(pdfBytes, "application/pdf");
   try {
@@ -521,9 +523,208 @@ export async function pdfToDocx(pdfBytes: Uint8Array): Promise<Uint8Array> {
 
     const items: Item[] = [];
     const contents: { x0: number; y0: number; x1: number; y1: number }[] = [];
+
+    // Una corriente es un flujo vertical independiente (ancho completo o una columna):
+    // encadena sus propios párrafos y calcula sus propios huecos.
+    type Stream = {
+      entries: Entry[];
+      left: number;
+      right: number;
+      items: Item[];
+      bottom: number;
+      padBot: number;
+      page: number;
+    };
+    const makeStream = (entries: Entry[]): Stream => ({
+      entries,
+      left: entries.length ? Math.min(...entries.map((e) => e.line.bbox[0])) : 0,
+      right: entries.length ? Math.max(...entries.map((e) => e.line.bbox[2])) : 0,
+      items: [],
+      bottom: NaN,
+      padBot: 0,
+      page: -1,
+    });
+
+    // Los renglones que arrancan en la misma x forman columnas; los que cruzan hacia la
+    // siguiente columna (títulos y párrafos de ancho completo) quedan en la corriente general.
+    const splitColumns = (kept: Entry[]): Stream[] => {
+      const byX = [...kept].sort((a, b) => a.line.bbox[0] - b.line.bbox[0]);
+      const clusters: { min: number; max: number; items: Entry[] }[] = [];
+      for (const e of byX) {
+        const x0 = e.line.bbox[0];
+        const last = clusters[clusters.length - 1];
+        if (last && x0 - last.max <= 6) {
+          last.items.push(e);
+          last.max = Math.max(last.max, x0);
+        } else clusters.push({ min: x0, max: x0, items: [e] });
+      }
+      const starts: number[] = [];
+      const yr: [number, number][] = [];
+      for (const c of clusters) {
+        if (c.items.length < 3) continue;
+        if (starts.length && c.min - starts[starts.length - 1] < 60) continue;
+        starts.push(c.min);
+        yr.push([
+          Math.min(...c.items.map((e) => e.line.bbox[1])),
+          Math.max(...c.items.map((e) => e.line.bbox[3])),
+        ]);
+      }
+      if (starts.length < 2) return [makeStream(kept)];
+      // una columna solo existe donde otra la acompaña en altura: el pie de figura o el
+      // último bloque de la página no arrastran a toda la página a una tabla de 2 columnas
+      const win: [number, number][] = yr.map(() => [Infinity, -Infinity]);
+      for (let i = 0; i < starts.length; i++) {
+        for (let j = 0; j < starts.length; j++) {
+          if (i === j) continue;
+          const a = Math.max(yr[i][0], yr[j][0]);
+          const b = Math.min(yr[i][1], yr[j][1]);
+          if (b - a < 24) continue;
+          win[i][0] = Math.min(win[i][0], a);
+          win[i][1] = Math.max(win[i][1], b);
+        }
+      }
+      const span: Entry[] = [];
+      const cols: Entry[][] = starts.map(() => []);
+      for (const e of kept) {
+        const x0 = e.line.bbox[0];
+        let k = -1;
+        for (let i = 0; i < clusters.length && k < 0; i++) {
+          if (x0 < clusters[i].min - 6 || x0 > clusters[i].max + 6) continue;
+          const ci = starts.indexOf(clusters[i].min);
+          if (ci >= 0) k = ci;
+        }
+        const cy = (e.line.bbox[1] + e.line.bbox[3]) / 2;
+        const limit = k >= 0 && k + 1 < starts.length ? starts[k + 1] - 12 : Infinity;
+        if (k < 0 || cy < win[k][0] || cy > win[k][1] || e.line.bbox[2] > limit) span.push(e);
+        else cols[k].push(e);
+      }
+      const streams = [makeStream(span), ...cols.map(makeStream)].filter((st, i) => i === 0 || st.entries.length > 0);
+      // hace falta ancho completo + al menos dos columnas con renglones
+      if (streams.length < 3) return [makeStream(kept)];
+      return streams;
+    };
+
+    const chainStream = (stream: Stream, p: number): void => {
+      const extS = { left: stream.left, right: stream.right };
+      const rows = buildRows(stream.entries);
+      let chain: Row[] = [];
+      let chainBlocks = new Set<PBlock>();
+      const flushChain = () => {
+        if (chain.length === 0) return;
+        const firstLines = chain[0].segs;
+        const lastRow = chain[chain.length - 1];
+        const align = alignRect(firstLines[0].bbox[0], firstLines[0].bbox[2], extS.left, extS.right);
+        const rowX0 = Math.min(...firstLines.map((l) => l.bbox[0]));
+        stream.items.push({
+          kind: "para",
+          page: p,
+          y0: Math.min(...firstLines.map((l) => l.bbox[1])),
+          y1: Math.max(...lastRow.segs.map((l) => l.bbox[3])),
+          x0: rowX0,
+          rows: chain,
+          align,
+          ind: align === AlignmentType.LEFT && rowX0 - extS.left > 0.5 ? rowX0 - extS.left : 0,
+        });
+        chain = [];
+        chainBlocks = new Set();
+      };
+      const rowText = (row: Row): string =>
+        row.segs.map((l) => l.chars.map((c) => c.c).join("")).join(" ").trimStart();
+      const isListItem = (row: Row): boolean => {
+        const t = rowText(row);
+        return /^[\u2022\u25CF\u25AA\u25E6\u2023\u2043*+\u00B7-]\s*\S/.test(t) || /^\d{1,2}[.)](\s|$)/.test(t);
+      };
+      const styleKey = (c: PChar): string => `${c.bold}|${c.italic}|${halfPts(c.size)}|${c.font}`;
+      // ponytail: a row ending well short of the right edge reads as paragraph end (MuPDF merges
+      // adjacent same-style paragraphs into one block); false-positives only on mid-para short lines
+      const shortLine = (row: Row): boolean =>
+        row.segs[row.segs.length - 1].bbox[2] - extS.left < 0.6 * (extS.right - extS.left);
+      for (const row of rows) {
+        if (chain.length && shortLine(chain[chain.length - 1])) flushChain();
+        const shared = [...row.blocks].some((b) => chainBlocks.has(b));
+        // ponytail: break on style flip at row boundary; over-eager if a paragraph changes font mid-wrap
+        const prevRow = chain[chain.length - 1];
+        const prevEnd = prevRow?.segs[prevRow.segs.length - 1].chars.at(-1);
+        const start = row.segs[0].chars[0];
+        const flip = prevEnd && start && styleKey(prevEnd) !== styleKey(start);
+        if (chain.length && (!shared || isListItem(row) || flip)) flushChain();
+        chain.push(row);
+        for (const b of row.blocks) chainBlocks.add(b);
+      }
+      flushChain();
+    };
+
+    // Huecos e interlineado: se resuelven aquí porque cada corriente tiene su propio ritmo.
+    // Interlineado exacto = distancia entre bases de renglones consecutivos del párrafo.
+    const fillGeometry = (stream: Stream): void => {
+      stream.items.sort((a, b) => a.y0 - b.y0 || a.x0 - b.x0);
+      for (const item of stream.items) {
+        // la figura flotante está anclada a la página: no ocupa alto ni gana hueco
+        if (item.float) {
+          item.before = 0;
+          item.line = 20;
+          item.padTop = 0;
+          item.padBot = 0;
+          continue;
+        }
+        const first = stream.page !== item.page;
+        const gap = first || Number.isNaN(stream.bottom) ? 0 : item.y0 - stream.bottom;
+        let padTop = 0;
+        let padBot = 0;
+        let line: number | undefined;
+        if (item.kind === "para" && item.rows) {
+          const leadFirst = Math.max(...item.rows[0].segs.map((l) => l.bbox[3] - l.bbox[1]));
+          const lastRow = item.rows[item.rows.length - 1];
+          const leadLast = Math.max(...lastRow.segs.map((l) => l.bbox[3] - l.bbox[1]));
+          const dys: number[] = [];
+          for (let i = 1; i < item.rows.length; i++) {
+            dys.push(baseline(item.rows[i].segs[0]) - baseline(item.rows[i - 1].segs[0]));
+          }
+          dys.sort((a, b) => a - b);
+          const measured = dys.length ? dys[dys.length >> 1] : 0;
+          const lineH = measured > leadFirst * 0.8 ? measured : leadFirst * 1.04;
+          padTop = 0.8 * (lineH - leadFirst);
+          padBot = 0.2 * (lineH - leadLast);
+          line = Math.round(lineH * 20);
+        } else if (item.kind === "image") {
+          line = Math.round(Math.max(1, item.image!.bbox[3] - item.image!.bbox[1]) * 20);
+        }
+        item.line = line;
+        item.padTop = padTop;
+        item.padBot = padBot;
+        item.before = twips(Math.max(0, gap - stream.padBot - padTop));
+        stream.bottom = first || Number.isNaN(stream.bottom) ? item.y1 : Math.max(stream.bottom, item.y1);
+        stream.padBot = padBot;
+        stream.page = item.page;
+      }
+    };
+
     for (let p = 0; p < pages.length; p++) {
       const pg = pages[p];
       markUnderlines(pg.blocks.flatMap((b) => b.lines), pg.strokes, pg.regions);
+      const kept: Entry[] = [];
+      for (const block of pg.blocks) {
+        for (const line of block.lines) {
+          if (line.chars.length === 0) continue;
+          const cx = (line.bbox[0] + line.bbox[2]) / 2;
+          const cy = (line.bbox[1] + line.bbox[3]) / 2;
+          if (pg.regions.some((r) => inRegion(r, cx, cy))) continue;
+          if (pg.artRects.some((a) => cx >= a[0] && cx <= a[2] && cy >= a[1] && cy <= a[3])) continue;
+          kept.push({ line, block });
+          contents.push({ x0: line.bbox[0], y0: line.bbox[1], x1: line.bbox[2], y1: line.bbox[3] });
+        }
+      }
+      const streams = splitColumns(kept);
+      const span = streams[0];
+      if (typeof process !== "undefined" && process.env?.PP_DEBUG) {
+        console.error(
+          `p${p} corrientes=${streams.length} renglones=${streams.map((st) => st.entries.length).join("/")} imgs=${pg.images
+            .map((im) => im.bbox.map((v) => Math.round(v)).join(","))
+            .join(" | ")}`,
+        );
+      }
+
+      // tablas: si caben dentro de una columna, van a esa columna
       for (const r of pg.regions) {
         const cols = r.xs.length - 1;
         const rows = r.ys.length - 1;
@@ -538,90 +739,85 @@ export async function pdfToDocx(pdfBytes: Uint8Array): Promise<Uint8Array> {
             const row = rowOf(r, cy);
             let last = colOf(r, line.chars[0].ox);
             let seg: PChar[] = [line.chars[0]];
+            const push = (cell: number, chars: PChar[], x1: number) =>
+              cells[row][cell].push({ y: line.bbox[1], x0: chars[0].ox, x1, chars });
             for (let i = 1; i < line.chars.length; i++) {
               const col = colOf(r, line.chars[i].ox);
               if (col !== last) {
-                cells[row][last].push({ y: line.bbox[1], chars: seg });
+                push(last, seg, line.chars[i].ox);
                 last = col;
                 seg = [];
               }
               seg.push(line.chars[i]);
             }
-            cells[row][last].push({ y: line.bbox[1], chars: seg });
+            push(last, seg, line.bbox[2]);
           }
         }
         for (const row of cells) for (const cell of row) cell.sort((a, b) => a.y - b.y);
-        items.push({ kind: "table", page: p, y0: r.y0, y1: r.y1, x0: r.x0, region: r, cells });
+        const target = streams.find((st, i) => i > 0 && r.x0 >= st.left - 1 && r.x1 <= st.right + 1) ?? span;
+        target.items.push({ kind: "table", page: p, y0: r.y0, y1: r.y1, x0: r.x0, region: r, cells });
         contents.push({ x0: r.x0, y0: r.y0, x1: r.x1, y1: r.y1 });
       }
-      const kept: { line: PLine; block: PBlock }[] = [];
-      for (const block of pg.blocks) {
-        for (const line of block.lines) {
-          if (line.chars.length === 0) continue;
-          const cx = (line.bbox[0] + line.bbox[2]) / 2;
-          const cy = (line.bbox[1] + line.bbox[3]) / 2;
-          if (pg.regions.some((r) => inRegion(r, cx, cy))) continue;
-          if (pg.artRects.some((a) => cx >= a[0] && cx <= a[2] && cy >= a[1] && cy <= a[3])) continue;
-          kept.push({ line, block });
-          contents.push({ x0: line.bbox[0], y0: line.bbox[1], x1: line.bbox[2], y1: line.bbox[3] });
-        }
-      }
-      // paragraphs: consecutive visual rows chained while they share a block
-      const rows = buildRows(kept);
-      let chain: Row[] = [];
-      let chainBlocks = new Set<PBlock>();
-      const flushChain = () => {
-        if (chain.length === 0) return;
-        const firstLines = chain[0].segs;
-        const lastRow = chain[chain.length - 1];
-        const ext = pageTextExtents(pg);
-        const align = alignRect(firstLines[0].bbox[0], firstLines[0].bbox[2], ext.left, ext.right);
-        const rowX0 = Math.min(...firstLines.map((l) => l.bbox[0]));
-        items.push({
-          kind: "para",
-          page: p,
-          y0: Math.min(...firstLines.map((l) => l.bbox[1])),
-          y1: Math.max(...lastRow.segs.map((l) => l.bbox[3])),
-          x0: rowX0,
-          rows: chain,
-          align,
-          ind: align === AlignmentType.LEFT && rowX0 - ext.left > 0.5 ? rowX0 - ext.left : 0,
-        });
-        chain = [];
-        chainBlocks = new Set();
-      };
-      const rowText = (row: Row): string =>
-        row.segs.map((l) => l.chars.map((c) => c.c).join("")).join(" ").trimStart();
-      const isListItem = (row: Row): boolean => {
-        const t = rowText(row);
-        return /^[\u2022\u25CF\u25AA\u25E6\u2023\u2043*+\u00B7-]\s*\S/.test(t) || /^\d{1,2}[.)](\s|$)/.test(t);
-      };
-      const styleKey = (c: PChar): string => `${c.bold}|${c.italic}|${halfPts(c.size)}|${c.font}`;
-      const ext = pageTextExtents(pg);
-      // ponytail: a row ending well short of the right edge reads as paragraph end (MuPDF merges
-      // adjacent same-style paragraphs into one block); false-positives only on mid-para short lines
-      const shortLine = (row: Row): boolean =>
-        row.segs[row.segs.length - 1].bbox[2] - ext.left < 0.6 * (ext.right - ext.left);
-      for (const row of rows) {
-        if (chain.length && shortLine(chain[chain.length - 1])) flushChain();
-        const shared = [...row.blocks].some((b) => chainBlocks.has(b));
-        // ponytail: break on style flip at row boundary; over-eager if a paragraph changes font mid-wrap
-        const prevRow = chain[chain.length - 1];
-        const prevEnd = prevRow?.segs[prevRow.segs.length - 1].chars.at(-1);
-        const start = row.segs[0].chars[0];
-        const flip = prevEnd && start && styleKey(prevEnd) !== styleKey(start);
-        if (chain.length && (!shared || isListItem(row) || flip)) flushChain();
-        chain.push(row);
-        for (const b of row.blocks) chainBlocks.add(b);
-      }
-      flushChain();
+
+      for (const st of streams) chainStream(st, p);
+
       for (const img of pg.images) {
         const icx = (img.bbox[0] + img.bbox[2]) / 2;
         const icy = (img.bbox[1] + img.bbox[3]) / 2;
         if (pg.regions.some((r) => inRegion(r, icx, icy))) continue;
-        items.push({ kind: "image", page: p, y0: img.bbox[1], y1: img.bbox[3], x0: img.bbox[0], image: img });
+        // si el original escribe al lado de la figura, la figura flota y el texto la rodea;
+        // si la figura vive en un hueco vacío, ocupa su renglón entero
+        const float = kept.some((e) => {
+          const cy = (e.line.bbox[1] + e.line.bbox[3]) / 2;
+          return (
+            cy >= img.bbox[1] - 2 &&
+            cy <= img.bbox[3] + 2 &&
+            (e.line.bbox[2] < img.bbox[0] - 2 || e.line.bbox[0] > img.bbox[2] + 2)
+          );
+        });
+        // la flotante está anclada a la página: su x no decide en qué columna vive
+        const target =
+          float || !streams.some((st, i) => i > 0 && icx >= st.left - 1 && icx <= st.right + 1)
+            ? span
+            : streams.find((st, i) => i > 0 && icx >= st.left - 1 && icx <= st.right + 1)!;
+        target.items.push({ kind: "image", page: p, y0: img.bbox[1], y1: img.bbox[3], x0: img.bbox[0], image: img, float });
         contents.push({ x0: img.bbox[0], y0: img.bbox[1], x1: img.bbox[2], y1: img.bbox[3] });
       }
+
+      // las columnas pasan a ser una tabla sin bordes: cada una con su contenido y su ritmo
+      const used = streams.slice(1).filter((st) => st.items.length);
+      const colY0 = used.length ? Math.min(...used.flatMap((st) => st.items.map((i) => i.y0))) : Infinity;
+      const colY1 = used.length ? Math.max(...used.flatMap((st) => st.items.map((i) => i.y1))) : -Infinity;
+      // si la página se cruza con la banda de columnas, la tabla empujaría ese contenido:
+      // se funde todo en una sola corriente y cada línea conserva su x vía sangría
+      const clash = span.items.some((it) => Math.min(it.y1, colY1) - Math.max(it.y0, colY0) > 4);
+      if (typeof process !== "undefined" && process.env?.PP_DEBUG) {
+        console.error(
+          `p${p} usados=${used.length} banda=${Math.round(colY0)}..${Math.round(colY1)} clash=${clash} ` +
+            `span=${span.items.map((i) => `${i.kind[0]}${Math.round(i.y0)}-${Math.round(i.y1)}`).join(" ")}`,
+        );
+      }
+      if (used.length >= 2 && !clash) {
+        for (const st of used) fillGeometry(st);
+        span.items.push({
+          kind: "cols",
+          page: p,
+          y0: colY0,
+          y1: colY1,
+          x0: Math.min(...used.map((st) => st.left)),
+          columns: used.map((st) => ({ left: st.left, right: st.right, items: st.items })),
+        });
+      } else {
+        const pageLeft = kept.length ? Math.min(...kept.map((e) => e.line.bbox[0])) : 0;
+        for (const st of used) {
+          const dx = st.left - pageLeft;
+          for (const it of st.items) {
+            span.items.push(dx > 0.5 && it.kind === "para" && it.ind ? { ...it, ind: it.ind + dx } : it);
+          }
+        }
+      }
+      fillGeometry(span);
+      items.push(...span.items);
     }
     items.sort((a, b) => a.page - b.page || a.y0 - b.y0 || a.x0 - b.x0);
 
@@ -638,59 +834,89 @@ export async function pdfToDocx(pdfBytes: Uint8Array): Promise<Uint8Array> {
     const rawTop = contents.length ? Math.min(...contents.map((c) => c.y0)) - bounds[1] : 0;
     // first line's box seats the glyph ~0.8·(box−ink) below the margin; pull the margin up so ink
     // lands on the PDF's first ink top (this offset otherwise cascades through the whole document)
-    const firstLead =
-      items[0]?.kind === "para" && items[0].rows
-        ? Math.max(...items[0].rows[0].segs.map((l) => l.bbox[3] - l.bbox[1]))
-        : 0;
+    const firstPara = items.find((i) => i.kind === "para" && i.rows);
+    const firstLead = firstPara?.rows ? Math.max(...firstPara.rows[0].segs.map((l) => l.bbox[3] - l.bbox[1])) : 0;
     const ext = contents.length
       ? {
           left: snap(Math.min(...contents.map((c) => c.x0)) - bounds[0]),
           top: Math.max(0, rawTop - 0.032 * firstLead),
           right: snap(bounds[2] - Math.max(...contents.map((c) => c.x1))),
-          bottom: snapDown(bounds[3] - Math.max(...contents.map((c) => c.y1))),
+          // the bottom margin only guards the page break: a document that stops well above
+          // the foot would otherwise get a huge margin and its last lines would overflow
+          bottom: Math.min(snapDown(bounds[3] - Math.max(...contents.map((c) => c.y1))), 72),
         }
       : { left: 0, top: 0, right: 0, bottom: 0 };
+    const contentLeft = bounds[0] + ext.left;
+    const contentRight = bounds[2] - ext.right;
 
-    const children: (Paragraph | Table)[] = [];
-    let prevPage = -1;
-    let prevBottom = 0;
-    let prevPadBot = 0;
-    for (const item of items) {
-      const first = item.page !== prevPage;
-      if (first) {
-        prevPage = item.page;
-        prevPadBot = 0;
+    const spacer = (h: number) =>
+      new Paragraph({ spacing: { before: 0, after: 0, line: Math.max(1, h), lineRule: LineRuleType.EXACT } });
+    const noBorder = { style: BorderStyle.NONE, size: 0, color: "FFFFFF" };
+
+    const emitItem = (item: Item, left: number, brk: boolean, rightInd = 0): (Paragraph | Table)[] => {
+      const out: (Paragraph | Table)[] = [];
+      const before = item.before ?? 0;
+      // el salto se pega al propio primer párrafo: un párrafo vacío aparte ocupa una
+      // línea entera y corre toda la página siguiente
+      const jump = brk ? { pageBreakBefore: true } : {};
+      // las tablas no admiten pageBreakBefore, así que van con un párrafo de 1pt
+      const jumpPara = () =>
+        new Paragraph({ pageBreakBefore: true, spacing: { before: 0, after: 0, line: 20, lineRule: LineRuleType.EXACT } });
+
+      if (item.kind === "cols") {
+        const cols = item.columns!;
+        if (brk) out.push(jumpPara());
+        if (before > 0) out.push(spacer(before));
+        const startLeft = Math.min(...cols.map((c) => c.left));
+        const widths = cols.map((c, k) =>
+          Math.max(1, (k + 1 < cols.length ? cols[k + 1].left : contentRight) - c.left),
+        );
+        const cells = cols.map((c, k) => {
+          // the cell spans to the next column, but the source text stops earlier: the gutter
+          // becomes a right indent so lines wrap where the original wraps
+          const nextLeft = k + 1 < cols.length ? cols[k + 1].left : contentRight;
+          const gut = Math.max(0, nextLeft - (c.right ?? nextLeft));
+          return new TableCell({
+            // LO centers cell text vertically by default: the columns must hang from the row top
+            verticalAlign: VerticalAlignTable.TOP,
+            margins: {
+              top: twips(Math.max(0, Math.min(...c.items.map((i) => i.y0)) - item.y0)),
+              bottom: 0,
+              left: 0,
+              right: 0,
+            },
+            children: c.items.map((child) => emitItem(child, c.left, false, gut)).flat(),
+          });
+        });
+        out.push(
+          new Table({
+            width: { size: twips(contentRight - startLeft), type: WidthType.DXA },
+            ...(startLeft > contentLeft + 0.5
+              ? { indent: { size: twips(startLeft - contentLeft), type: WidthType.DXA } }
+              : {}),
+            layout: TableLayoutType.FIXED,
+            columnWidths: widths.map(twips),
+            borders: {
+              top: noBorder,
+              bottom: noBorder,
+              left: noBorder,
+              right: noBorder,
+              insideHorizontal: noBorder,
+              insideVertical: noBorder,
+            },
+            rows: [new TableRow({ children: cells })],
+          }),
+        );
+        return out;
       }
-      const gap = first ? 0 : item.y0 - prevBottom;
-      prevBottom = first ? item.y1 : Math.max(prevBottom, item.y1);
-      // Exact line height = ink bbox × 1.04, written in twips (docx EXACT takes twips).
-      // LO seats the glyph ~80% down the extra space: padTop=0.8(H−L), padBot=0.2(H−L).
-      let padTop = 0;
-      let padBot = 0;
-      let line: number | undefined;
-      if (item.kind === "para" && item.rows) {
-        const leadFirst = Math.max(...item.rows[0].segs.map((l) => l.bbox[3] - l.bbox[1]));
-        const lastRow = item.rows[item.rows.length - 1];
-        const leadLast = Math.max(...lastRow.segs.map((l) => l.bbox[3] - l.bbox[1]));
-        const lineH = leadFirst * 1.04;
-        padTop = 0.8 * (lineH - leadFirst);
-        padBot = 0.2 * (lineH - leadLast);
-        line = Math.round(lineH * 20);
-      }
-      const before = twips(Math.max(0, gap - prevPadBot - padTop));
-      prevPadBot = padBot;
-      const pageBreak = item.page > 0 && first && children.length > 0;
-      const opts = {
-        spacing: { before, after: 0, ...(line ? { line, lineRule: LineRuleType.EXACT } : {}) },
-        ...(pageBreak ? { pageBreakBefore: true } : {}),
-      };
 
       if (item.kind === "table") {
         const r = item.region!;
         const cells = item.cells!;
+        if (brk) out.push(jumpPara());
+        if (before > 0) out.push(spacer(before));
         const cols = r.xs.length - 1;
         const rows = r.ys.length - 1;
-        if (pageBreak) children.push(new Paragraph({ pageBreakBefore: true }));
         const thick = r.strokes.reduce((m, s) => m + (s.horizontal ? s.y1 - s.y0 : s.x1 - s.x0), 0) / r.strokes.length;
         const borderSize = Math.min(96, Math.max(2, Math.round(thick * 8)));
         const border = {
@@ -700,7 +926,6 @@ export async function pdfToDocx(pdfBytes: Uint8Array): Promise<Uint8Array> {
         };
         // rule-tables (Chrome/Word) have no vertical lines at all
         const hasVertical = r.strokes.some((sv) => !sv.horizontal);
-        const noBorder = { style: BorderStyle.NONE, size: 0, color: "FFFFFF" };
         // LO adds ~one border width (half of top+bottom, borders centered on the edge) to row height
         const borderPt = borderSize / 8;
         const rowList: TableRow[] = [];
@@ -717,6 +942,14 @@ export async function pdfToDocx(pdfBytes: Uint8Array): Promise<Uint8Array> {
             const fcy = (r.ys[i] + r.ys[i + 1]) / 2;
             const fill = r.fills.find((f) => fcx >= f.x0 && fcx <= f.x1 && fcy >= f.y0 && fcy <= f.y1);
             const color = hex(fill?.color ?? [1, 1, 1]);
+            // cell text keeps the source's alignment inside the cell (numbers usually sit right)
+            let jc: Alignment = AlignmentType.LEFT;
+            if (segs.length) {
+              const pl = Math.min(...segs.map((s) => s.x0)) - r.xs[j];
+              const pr = r.xs[j + 1] - Math.max(...segs.map((s) => s.x1));
+              if (pr < pl - 6) jc = AlignmentType.RIGHT;
+              else if (Math.abs(pl - pr) <= 4 && pl > 3) jc = AlignmentType.CENTER;
+            }
             cellList.push(
               new TableCell({
                 margins: { top: pad, bottom: pad },
@@ -726,6 +959,7 @@ export async function pdfToDocx(pdfBytes: Uint8Array): Promise<Uint8Array> {
                       (seg) =>
                         new Paragraph({
                           children: runsOf(seg.chars),
+                          alignment: jc,
                           spacing: {
                             before: 0,
                             after: 0,
@@ -740,7 +974,7 @@ export async function pdfToDocx(pdfBytes: Uint8Array): Promise<Uint8Array> {
           }
           rowList.push(new TableRow({ children: cellList }));
         }
-        children.push(
+        out.push(
           new Table({
             width: { size: twips(r.x1 - r.x0), type: WidthType.DXA },
             layout: TableLayoutType.FIXED,
@@ -756,42 +990,65 @@ export async function pdfToDocx(pdfBytes: Uint8Array): Promise<Uint8Array> {
             rows: rowList,
           }),
         );
-        continue;
+        return out;
       }
 
       if (item.kind === "image") {
         const img = item.image!;
-        const pg = pages[item.page];
-        const EMU = 12700; // docx offsets are EMUs: 1pt = 12700
-        children.push(
+        const h = img.bbox[3] - img.bbox[1];
+        const EMU = 12700;
+        if (item.float) {
+          // ancla en coordenadas de página + wrap: el párrafo no consume alto
+          const pg = pages[item.page];
+          out.push(
+            new Paragraph({
+              ...jump,
+              spacing: { before: 0, after: 0, line: 20, lineRule: LineRuleType.EXACT },
+              children: [
+                new ImageRun({
+                  type: "png",
+                  data: img.png,
+                  transformation: {
+                    width: Math.max(1, Math.round(((img.bbox[2] - img.bbox[0]) * 96) / 72)),
+                    height: Math.max(1, Math.round((h * 96) / 72)),
+                  },
+                  floating: {
+                    horizontalPosition: {
+                      relative: HorizontalPositionRelativeFrom.PAGE,
+                      offset: Math.round((img.bbox[0] - pg.bounds[0]) * EMU),
+                    },
+                    verticalPosition: {
+                      relative: VerticalPositionRelativeFrom.PAGE,
+                      offset: Math.round((img.bbox[1] - pg.bounds[1]) * EMU),
+                    },
+                    wrap: { type: TextWrappingType.SQUARE, side: TextWrappingSide.BOTH_SIDES },
+                  },
+                }),
+              ],
+            }),
+          );
+          return out;
+        }
+        // en línea: el renglón ocupa exactamente la altura de la figura y el sangrado la
+        // coloca en su columna; el texto siguiente cae debajo, sin rodearla
+        out.push(
           new Paragraph({
-            ...(pageBreak ? { pageBreakBefore: true } : {}),
-            // the anchor paragraph must not consume vertical space: the image floats
-            spacing: { before: 0, after: 0, line: 20, lineRule: LineRuleType.EXACT },
+            ...jump,
+            spacing: { before, after: 0, line: item.line ?? Math.round(Math.max(1, h) * 20), lineRule: LineRuleType.EXACT },
+            indent: { left: twips(Math.max(0, img.bbox[0] - left)) },
             children: [
               new ImageRun({
                 type: "png",
                 data: img.png,
                 transformation: {
                   width: Math.max(1, Math.round(((img.bbox[2] - img.bbox[0]) * 96) / 72)),
-                  height: Math.max(1, Math.round(((img.bbox[3] - img.bbox[1]) * 96) / 72)),
-                },
-                floating: {
-                  horizontalPosition: {
-                    relative: HorizontalPositionRelativeFrom.PAGE,
-                    offset: Math.round((img.bbox[0] - pg.bounds[0]) * EMU),
-                  },
-                  verticalPosition: {
-                    relative: VerticalPositionRelativeFrom.PAGE,
-                    offset: Math.round((img.bbox[1] - pg.bounds[1]) * EMU),
-                  },
-                  wrap: { type: TextWrappingType.SQUARE, side: TextWrappingSide.BOTH_SIDES },
+                  height: Math.max(1, Math.round((h * 96) / 72)),
                 },
               }),
             ],
           }),
         );
-        continue;
+        return out;
       }
 
       const chars = paraChars(item.rows!);
@@ -800,14 +1057,26 @@ export async function pdfToDocx(pdfBytes: Uint8Array): Promise<Uint8Array> {
       const runs = marker
         ? [...runsOf(chars.slice(0, marker[1].length)), new TextRun({ text: "\t" }), ...runsOf(chars.slice(marker[0].length))]
         : runsOf(chars);
-      children.push(
+      out.push(
         new Paragraph({
-          ...opts,
+          ...jump,
+          spacing: { before, after: 0, ...(item.line ? { line: item.line, lineRule: LineRuleType.EXACT } : {}) },
           alignment: item.align ?? AlignmentType.LEFT,
-          ...(item.ind ? { indent: { left: twips(item.ind) } } : {}),
+          ...(item.ind || rightInd > 0.5
+            ? { indent: { left: twips(item.ind ?? 0), ...(rightInd > 0.5 ? { right: twips(rightInd) } : {}) } }
+            : {}),
           children: runs.length ? runs : [new TextRun("")],
         }),
       );
+      return out;
+    };
+
+    const children: (Paragraph | Table)[] = [];
+    let lastPage = -1;
+    for (const item of items) {
+      const brk = item.page !== lastPage && children.length > 0;
+      if (item.page !== lastPage) lastPage = item.page;
+      children.push(...emitItem(item, contentLeft, brk));
     }
 
     const out = new DocxDocument({
