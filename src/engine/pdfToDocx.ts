@@ -2,6 +2,10 @@ import * as mupdf from "mupdf";
 import {
   AlignmentType,
   BorderStyle,
+  HorizontalPositionRelativeFrom,
+  TextWrappingSide,
+  TextWrappingType,
+  VerticalPositionRelativeFrom,
   Document as DocxDocument,
   ImageRun,
   Paragraph,
@@ -85,6 +89,7 @@ type PageData = {
   strokes: Stroke[];
   fills: Fill[];
   regions: Region[];
+  artRects: Rect[];
 };
 
 const STXT = "preserve-images,preserve-whitespace,vectors";
@@ -147,6 +152,7 @@ function collect(page: mupdf.Page): Omit<PageData, "bounds" | "regions"> {
   const images: PImage[] = [];
   const strokes: Stroke[] = [];
   const fills: Fill[] = [];
+  const art: Rect[] = [];
   const st = page.toStructuredText(STXT);
   let block: PBlock | null = null;
   let line: PLine | null = null;
@@ -193,19 +199,68 @@ function collect(page: mupdf.Page): Omit<PageData, "bounds" | "regions"> {
       const h = y1 - y0;
       const [cr = 0, cg = 0, cb = 0] = color;
       const rgb: Rgb = [cr, cg, cb];
-      if (flags.isStroked) {
-        if (h <= 2.5 && w > 4) strokes.push({ horizontal: true, x0, y0, x1, y1, color: rgb });
-        else if (w <= 2.5 && h > 4) strokes.push({ horizontal: false, x0, y0, x1, y1, color: rgb });
-      } else if (w > 2 && h > 2) {
-        fills.push({ x0, y0, x1, y1, color: rgb });
-      }
+      // rules: Chrome/Word draw cell borders as thin *fills*, LibreOffice as thin strokes
+      if (h <= 2.5 && w > 4) strokes.push({ horizontal: true, x0, y0, x1, y1, color: rgb });
+      else if (w <= 2.5 && h > 4) strokes.push({ horizontal: false, x0, y0, x1, y1, color: rgb });
+      else if (w > 2 && h > 2 && !flags.isStroked) fills.push({ x0, y0, x1, y1, color: rgb });
+      // figures/logos/charts: big art the text layer cannot describe
+      if (w >= 60 && h >= 40) art.push(bbox);
     },
   });
   st.destroy();
-  return { blocks, images, strokes, fills };
+  const artRects = mergeRects(art).filter((r) => r[2] - r[0] >= 60 && r[3] - r[1] >= 40);
+  for (const rect of artRects) {
+    const png = rasterArt(page, rect);
+    if (png) images.push({ bbox: rect, png });
+  }
+  return { blocks, images, strokes, fills, artRects };
 }
 
-function detectRegions(strokes: Stroke[]): Region[] {
+// the same figure arrives as separate fill + stroke passes; union what overlaps
+function mergeRects(rects: Rect[]): Rect[] {
+  const out: Rect[] = [];
+  for (const r of rects) {
+    const cur: Rect = [...r];
+    let merged = true;
+    while (merged) {
+      merged = false;
+      for (let i = 0; i < out.length; i++) {
+        const o = out[i];
+        if (cur[0] <= o[2] + 2 && o[0] <= cur[2] + 2 && cur[1] <= o[3] + 2 && o[1] <= cur[3] + 2) {
+          cur[0] = Math.min(cur[0], o[0]);
+          cur[1] = Math.min(cur[1], o[1]);
+          cur[2] = Math.max(cur[2], o[2]);
+          cur[3] = Math.max(cur[3], o[3]);
+          out.splice(i, 1);
+          merged = true;
+          break;
+        }
+      }
+    }
+    out.push(cur);
+  }
+  return out;
+}
+
+// render just the art's bbox (the pixmap bounds clip the draw device), at 2x for crisp output
+function rasterArt(page: mupdf.Page, bbox: Rect): Uint8Array | null {
+  try {
+    const S = 2;
+    const pix = new mupdf.Pixmap(mupdf.ColorSpace.DeviceRGB, [bbox[0] * S, bbox[1] * S, bbox[2] * S, bbox[3] * S], false);
+    pix.clear(255);
+    const dev = new mupdf.DrawDevice(mupdf.Matrix.identity, pix);
+    page.run(dev, mupdf.Matrix.scale(S, S));
+    dev.close();
+    const png = pix.asPNG();
+    dev.destroy();
+    pix.destroy();
+    return png;
+  } catch {
+    return null;
+  }
+}
+
+function detectRegions(strokes: Stroke[], fills: Fill[]): Region[] {
   const n = strokes.length;
   const parent = Array.from({ length: n }, (_, i) => i);
   const find = (i: number): number => (parent[i] === i ? i : (parent[i] = find(parent[i])));
@@ -238,6 +293,77 @@ function detectRegions(strokes: Stroke[]): Region[] {
       fills: [],
     });
   }
+  if (regions.length) return regions;
+  return detectRuleTable(strokes, fills);
+}
+
+type Band = { y: number; segs: Stroke[]; x0: number; x1: number };
+
+// Chrome/Word tables carry only horizontal row separators (split per cell, no
+// verticals at all), so the grid above finds nothing. Chain bands of rules that
+// share one x-span, then take columns from the segment ends.
+function detectRuleTable(strokes: Stroke[], fills: Fill[]): Region[] {
+  const horiz = strokes
+    .filter((s) => s.horizontal && s.x1 - s.x0 >= 15)
+    .sort((a, b) => (a.y0 + a.y1) / 2 - (b.y0 + b.y1) / 2);
+  const bands: Band[] = [];
+  for (const s of horiz) {
+    const y = (s.y0 + s.y1) / 2;
+    const last = bands[bands.length - 1];
+    if (last && Math.abs(last.y - y) <= CLUSTER_TOL) {
+      last.segs.push(s);
+      last.x0 = Math.min(last.x0, s.x0);
+      last.x1 = Math.max(last.x1, s.x1);
+    } else bands.push({ y, segs: [s], x0: s.x0, x1: s.x1 });
+  }
+  const regions: Region[] = [];
+  let chain: Band[] = [];
+  const flush = () => {
+    // >=3 rules of the same width: single-column rules (heading underlines) have one segment
+    if (chain.length >= 3 && chain.every((b) => b.segs.length >= 2)) {
+      const segs = chain.flatMap((b) => b.segs);
+      const xs = cluster(segs.flatMap((s) => [s.x0, s.x1]));
+      const x0 = Math.min(...segs.map((s) => s.x0));
+      const x1 = Math.max(...segs.map((s) => s.x1));
+      const ruleYs = chain.map((b) => b.y);
+      // header shading: per-cell fills aligned to column edges, sitting just above the first rule
+      const bandEdges = fills
+        .filter(
+          (f) =>
+            f.y1 >= ruleYs[0] - 60 &&
+            f.y0 <= ruleYs[0] - 1 &&
+            f.y1 <= ruleYs[0] + 5 &&
+            f.x1 - f.x0 >= 15 &&
+            xs.some((x) => Math.abs(f.x0 - x) <= CLUSTER_TOL) &&
+            xs.some((x) => Math.abs(f.x1 - x) <= CLUSTER_TOL),
+        )
+        .flatMap((f) => [f.y0, f.y1]);
+      const ys = cluster([...ruleYs, ...bandEdges]);
+      if (xs.length >= 2 && ys.length >= 2) {
+        regions.push({
+          x0,
+          y0: Math.min(segs[0].y0, ys[0] - 1),
+          x1,
+          y1: Math.max(segs[segs.length - 1].y1, ys[ys.length - 1] + 1),
+          xs,
+          ys,
+          strokes: segs,
+          fills: [],
+        });
+      }
+    }
+    chain = [];
+  };
+  for (const b of bands.filter((x) => x.segs.length >= 2)) {
+    const prev = chain[chain.length - 1];
+    if (prev && Math.abs(prev.x0 - b.x0) <= 2 && Math.abs(prev.x1 - b.x1) <= 2 && b.y - prev.y <= 150) {
+      chain.push(b);
+    } else {
+      flush();
+      chain = [b];
+    }
+  }
+  flush();
   return regions;
 }
 
@@ -338,11 +464,18 @@ function paraChars(rowList: Row[]): PChar[] {
   };
   for (let ri = 0; ri < rowList.length; ri++) {
     let prev: PLine | null = null;
+    let prevTrail = false;
     for (const seg of rowList[ri].segs) {
         let chars = seg.chars;
-        while (chars.length && chars[chars.length - 1].c === " ") chars = chars.slice(0, -1);
+        let trail = false;
+        while (chars.length && chars[chars.length - 1].c === " ") {
+          trail = true;
+          chars = chars.slice(0, -1);
+        }
         const gap = prev ? seg.bbox[0] - prev.bbox[2] : ri > 0 ? 99 : -1;
-        const needSep = prev ? gap > 1 : ri > 0;
+        // a stripped trailing space is still a word break between split runs
+        const needSep = prev ? gap > 1 || prevTrail : ri > 0;
+        prevTrail = trail;
         if (needSep) {
           while (chars.length && chars[0].c === " ") chars = chars.slice(1);
           const src = chars[0] ?? out[out.length - 1];
@@ -381,7 +514,7 @@ export async function pdfToDocx(pdfBytes: Uint8Array): Promise<Uint8Array> {
       const page = doc.loadPage(i);
       const data = collect(page);
       totalChars += data.blocks.reduce((n, b) => n + b.lines.reduce((m, l) => m + l.chars.length, 0), 0);
-      pages.push({ bounds: [...page.getBounds()], ...data, regions: detectRegions(data.strokes) });
+      pages.push({ bounds: [...page.getBounds()], ...data, regions: detectRegions(data.strokes, data.fills) });
       page.destroy();
     }
     if (totalChars === 0) throw new ScannedPdfError("El PDF no tiene texto selectable (parece escaneado).");
@@ -428,6 +561,7 @@ export async function pdfToDocx(pdfBytes: Uint8Array): Promise<Uint8Array> {
           const cx = (line.bbox[0] + line.bbox[2]) / 2;
           const cy = (line.bbox[1] + line.bbox[3]) / 2;
           if (pg.regions.some((r) => inRegion(r, cx, cy))) continue;
+          if (pg.artRects.some((a) => cx >= a[0] && cx <= a[2] && cy >= a[1] && cy <= a[3])) continue;
           kept.push({ line, block });
           contents.push({ x0: line.bbox[0], y0: line.bbox[1], x1: line.bbox[2], y1: line.bbox[3] });
         }
@@ -482,6 +616,9 @@ export async function pdfToDocx(pdfBytes: Uint8Array): Promise<Uint8Array> {
       }
       flushChain();
       for (const img of pg.images) {
+        const icx = (img.bbox[0] + img.bbox[2]) / 2;
+        const icy = (img.bbox[1] + img.bbox[3]) / 2;
+        if (pg.regions.some((r) => inRegion(r, icx, icy))) continue;
         items.push({ kind: "image", page: p, y0: img.bbox[1], y1: img.bbox[3], x0: img.bbox[0], image: img });
         contents.push({ x0: img.bbox[0], y0: img.bbox[1], x1: img.bbox[2], y1: img.bbox[3] });
       }
@@ -561,6 +698,9 @@ export async function pdfToDocx(pdfBytes: Uint8Array): Promise<Uint8Array> {
           size: borderSize,
           color: hex(r.strokes[0].color) ?? "000000",
         };
+        // rule-tables (Chrome/Word) have no vertical lines at all
+        const hasVertical = r.strokes.some((sv) => !sv.horizontal);
+        const noBorder = { style: BorderStyle.NONE, size: 0, color: "FFFFFF" };
         // LO adds ~one border width (half of top+bottom, borders centered on the edge) to row height
         const borderPt = borderSize / 8;
         const rowList: TableRow[] = [];
@@ -606,12 +746,12 @@ export async function pdfToDocx(pdfBytes: Uint8Array): Promise<Uint8Array> {
             layout: TableLayoutType.FIXED,
             columnWidths: r.xs.slice(1).map((x, k) => twips(x - r.xs[k])),
             borders: {
-              top: border,
+              top: hasVertical ? border : noBorder,
               bottom: border,
-              left: border,
-              right: border,
+              left: hasVertical ? border : noBorder,
+              right: hasVertical ? border : noBorder,
               insideHorizontal: border,
-              insideVertical: border,
+              insideVertical: hasVertical ? border : noBorder,
             },
             rows: rowList,
           }),
@@ -619,13 +759,15 @@ export async function pdfToDocx(pdfBytes: Uint8Array): Promise<Uint8Array> {
         continue;
       }
 
-      const exts = pageTextExtents(pages[item.page]);
       if (item.kind === "image") {
         const img = item.image!;
+        const pg = pages[item.page];
+        const EMU = 12700; // docx offsets are EMUs: 1pt = 12700
         children.push(
           new Paragraph({
-            ...opts,
-            alignment: alignRect(img.bbox[0], img.bbox[2], exts.left, exts.right),
+            ...(pageBreak ? { pageBreakBefore: true } : {}),
+            // the anchor paragraph must not consume vertical space: the image floats
+            spacing: { before: 0, after: 0, line: 20, lineRule: LineRuleType.EXACT },
             children: [
               new ImageRun({
                 type: "png",
@@ -633,6 +775,17 @@ export async function pdfToDocx(pdfBytes: Uint8Array): Promise<Uint8Array> {
                 transformation: {
                   width: Math.max(1, Math.round(((img.bbox[2] - img.bbox[0]) * 96) / 72)),
                   height: Math.max(1, Math.round(((img.bbox[3] - img.bbox[1]) * 96) / 72)),
+                },
+                floating: {
+                  horizontalPosition: {
+                    relative: HorizontalPositionRelativeFrom.PAGE,
+                    offset: Math.round((img.bbox[0] - pg.bounds[0]) * EMU),
+                  },
+                  verticalPosition: {
+                    relative: VerticalPositionRelativeFrom.PAGE,
+                    offset: Math.round((img.bbox[1] - pg.bounds[1]) * EMU),
+                  },
+                  wrap: { type: TextWrappingType.SQUARE, side: TextWrappingSide.BOTH_SIDES },
                 },
               }),
             ],

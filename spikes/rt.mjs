@@ -1,0 +1,11 @@
+import { readFileSync, writeFileSync } from "node:fs";
+import wasmLoader from "../node_modules/@matbee/libreoffice-converter/wasm/loader.cjs";
+import { LibreOfficeConverter } from "../node_modules/@matbee/libreoffice-converter/dist/index.js";
+const WASM = new URL("../node_modules/@matbee/libreoffice-converter/wasm/", import.meta.url).pathname;
+const lo = new LibreOfficeConverter({ wasmLoader, wasmPath: WASM, verbose: false });
+await lo.initialize();
+const docx = new Uint8Array(readFileSync("/tmp/opencode/ui-out.docx"));
+const pdf = await lo.convert(docx, { outputFormat: "pdf", filename: "x.docx" });
+writeFileSync("/tmp/opencode/rt.pdf", pdf.data);
+console.log("rt.pdf", pdf.data.length, "bytes, fonts:", Buffer.from(pdf.data).includes("/BaseFont"));
+process.exit(0);

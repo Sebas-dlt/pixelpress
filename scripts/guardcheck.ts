@@ -3,6 +3,7 @@ import {
   pdfHasText,
   docxHasText,
   docxEntryNames,
+  docxEntry,
   detectKind,
   convertFile,
   ConvertError,
@@ -48,6 +49,22 @@ cases.push(
   ["rejected: pdf without text layer", await engineRejects(load("../spikes/out/blank.pdf"), "scanned"), "scanned"],
   ["rejected: password-protected pdf", await engineRejects(load("../spikes/out/protected.pdf"), "protected"), "protected"],
 );
+
+// fidelidad: un PDF realista (tabla con filetes finos, figura vectorial, runs partidos)
+// debe sobrevivir el roundtrip: tabla + cabecera sombreada + imagen flotante + texto
+const realDocx = await engine.pdfToDocx(load("../spikes/out/real.pdf"));
+const realXml = (await docxEntry(realDocx, "word/document.xml")) ?? "";
+cases.push([
+  "real pdf keeps table, shaded header and figure",
+  [
+    realXml.includes("<w:tbl>"),
+    realXml.includes('w:fill="16324F"'),
+    realXml.includes("<wp:anchor"),
+    docxEntryNames(realDocx).some((n) => n.startsWith("word/media/")),
+    realXml.includes("PixelPress Pro"),
+  ].every(Boolean),
+  true,
+]);
 
 let bad = 0;
 for (const [name, got, want] of cases) {
