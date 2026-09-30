@@ -179,12 +179,12 @@ export default function App() {
           <div className="relative">
             <div className="card-pop-lg rounded-[2rem] border-2 border-ink bg-paper p-6">
               <div className="mb-4 flex items-center justify-between">
-                <span className="text-xs font-bold text-ink/60">convertidor local</span>
-                <span aria-hidden="true" className="flex gap-1.5">
-                  <span className="size-2.5 rounded-full bg-brand-ink" />
-                  <span className="size-2.5 rounded-full bg-sun" />
-                  <span className="size-2.5 rounded-full bg-mint" />
+                <span aria-hidden="true" className="flex gap-2">
+                  <span className="size-3 rounded-full bg-[#ff5f57] ring-1 ring-black/15" />
+                  <span className="size-3 rounded-full bg-[#febc2e] ring-1 ring-black/15" />
+                  <span className="size-3 rounded-full bg-[#28c840] ring-1 ring-black/15" />
                 </span>
+                <span className="text-xs font-bold text-ink/60">convertidor</span>
               </div>
               <div className="grid gap-4 sm:grid-cols-2">
                 {MODES.map((m) => (
