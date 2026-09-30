@@ -1,5 +1,6 @@
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { ConvertError, convertFile, detectKind, type Kind } from "./convert";
+import { CONTACT_EMAIL, Privacidad, Terminos } from "./legal";
 
 type Status =
   | { phase: "idle" }
@@ -76,10 +77,38 @@ export default function App() {
   const [dragging, setDragging] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
   const urlRef = useRef<string | null>(null);
+  const [route, setRoute] = useState(() => window.location.hash);
+  const [consent, setConsent] = useState(false);
 
   const busy = status.phase === "working";
 
+  useEffect(() => {
+    const siteTitle = document.title;
+    const onHash = () => {
+      const h = window.location.hash;
+      setRoute(h);
+      if (h === "#/privacidad" || h === "#/terminos") {
+        window.scrollTo(0, 0);
+        document.title =
+          h === "#/privacidad"
+            ? "Política de privacidad · PixelPress"
+            : "Términos y condiciones · PixelPress";
+      } else {
+        document.title = siteTitle;
+      }
+    };
+    window.addEventListener("hashchange", onHash);
+    return () => window.removeEventListener("hashchange", onHash);
+  }, []);
+
   async function start(file: File) {
+    if (!consent) {
+      setStatus({
+        phase: "error",
+        message: "Marcá la casilla de la política de privacidad para poder convertir.",
+      });
+      return;
+    }
     const kind = detectKind(file.name);
     if (!kind) {
       setStatus({ phase: "error", message: "Formato no soportado. Sube un PDF o un DOCX." });
@@ -130,8 +159,11 @@ export default function App() {
             <a className="transition-colors hover:text-brand" href="#convertidor">
               Convertir
             </a>
-            <a className="transition-colors hover:text-brand" href="#privacidad">
+            <a className="transition-colors hover:text-brand" href="#/privacidad">
               Privacidad
+            </a>
+            <a className="transition-colors hover:text-brand" href="#/terminos">
+              Términos
             </a>
             <a className="transition-colors hover:text-brand" href="#preguntas">
               Preguntas
@@ -147,6 +179,12 @@ export default function App() {
       </header>
 
       <main className="mx-auto max-w-6xl px-6">
+        {route === "#/privacidad" ? (
+          <Privacidad />
+        ) : route === "#/terminos" ? (
+          <Terminos />
+        ) : (
+          <>
         <section id="convertidor" className="grid items-center gap-12 pb-16 pt-8 md:grid-cols-2">
           <div>
             <p className="inline-flex -rotate-2 items-center gap-2 rounded-full bg-sun px-4 py-2 text-sm font-bold text-ink">
@@ -168,7 +206,7 @@ export default function App() {
                 Empezar gratis
               </a>
               <a
-                href="#privacidad"
+                href="#/privacidad"
                 className="rounded-full border-2 border-ink bg-paper px-8 py-4 font-display text-lg font-bold text-ink transition-colors hover:bg-sun"
               >
                 Cómo protegemos tus archivos
@@ -207,6 +245,7 @@ export default function App() {
                 ))}
               </div>
 
+              <form onSubmit={(e) => e.preventDefault()}>
               <div
                 onDragOver={(e) => {
                   e.preventDefault();
@@ -317,7 +356,24 @@ export default function App() {
                 />
               </div>
 
-              <p className="mt-4 text-center text-xs font-bold text-ink/60">
+              <label className="mt-4 flex cursor-pointer items-start justify-center gap-2 text-xs font-semibold text-ink/70">
+                <input
+                  type="checkbox"
+                  checked={consent}
+                  onChange={(e) => setConsent(e.target.checked)}
+                  className="mt-px size-4 shrink-0 accent-brand"
+                />
+                <span>
+                  Acepto la{" "}
+                  <a href="#/privacidad" className="font-bold text-brand-ink underline">
+                    política de privacidad
+                  </a>{" "}
+                  para convertir mis archivos.
+                </span>
+              </label>
+              </form>
+
+              <p className="mt-3 text-center text-xs font-bold text-ink/60">
                 Todo se procesa en tu navegador · 0 archivos enviados
               </p>
             </div>
@@ -327,7 +383,7 @@ export default function App() {
           </div>
         </section>
 
-        <section id="privacidad" className="pb-16">
+        <section id="formatos" className="pb-16">
           <h2 className="mb-8 font-display text-4xl font-extrabold">Elige tu conversión</h2>
           <div className="grid gap-6 md:grid-cols-3">
             {FEATURES.map((f) => (
@@ -379,10 +435,23 @@ export default function App() {
             ))}
           </div>
         </section>
+          </>
+        )}
       </main>
 
       <footer className="mx-auto max-w-6xl px-6 pb-10 text-center text-sm font-semibold text-ink/60">
-        PixelPress · Hecho para confiar en tus documentos
+        <div className="flex flex-wrap justify-center gap-x-6 gap-y-2">
+          <a className="transition-colors hover:text-brand" href="#/privacidad">
+            Política de privacidad
+          </a>
+          <a className="transition-colors hover:text-brand" href="#/terminos">
+            Términos y condiciones
+          </a>
+          <a className="transition-colors hover:text-brand" href={`mailto:${CONTACT_EMAIL}`}>
+            Contacto
+          </a>
+        </div>
+        <p className="mt-3">PixelPress · Hecho para confiar en tus documentos</p>
       </footer>
     </div>
   );
