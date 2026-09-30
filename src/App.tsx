@@ -105,7 +105,7 @@ export default function App() {
     if (!consent) {
       setStatus({
         phase: "error",
-        message: "Marcá la casilla de la política de privacidad para poder convertir.",
+        message: "Marca la casilla de la política de privacidad para poder convertir.",
       });
       return;
     }

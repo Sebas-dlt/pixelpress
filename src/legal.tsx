@@ -56,13 +56,13 @@ export function Privacidad() {
       <P>
         PixelPress es un sitio web de código abierto (licencia AGPL-3.0) operado de forma independiente.
         Para cualquier consulta sobre privacidad o para ejercer un derecho de protección de datos,
-        escribí a <a className="font-bold text-brand-ink underline" href={`mailto:${CONTACT_EMAIL}`}>{CONTACT_EMAIL}</a>{" "}
-        o abrí un ticket en <a className="font-bold text-brand-ink underline" href={ISSUES_URL} target="_blank" rel="noreferrer">nuestro repositorio público</a>.
+        escribe a <a className="font-bold text-brand-ink underline" href={`mailto:${CONTACT_EMAIL}`}>{CONTACT_EMAIL}</a>{" "}
+        o abre un ticket en <a className="font-bold text-brand-ink underline" href={ISSUES_URL} target="_blank" rel="noreferrer">nuestro repositorio público</a>.
       </P>
 
       <H2>2. Qué datos tratamos</H2>
       <P>
-        <strong>a) Tus archivos (datos que vos cargás).</strong> Los PDF o DOCX que elegís se leen y
+        <strong>a) Tus archivos (datos que cargas).</strong> Los PDF o DOCX que eliges se leen y
         escriben <strong>en memoria de tu propio navegador</strong>, usando WebAssembly. No se envían a
         ningún servidor de PixelPress porque el sitio no tiene: no hay subida, no hay copia remota, no
         hay cola de trabajos. El archivo vive mientras dura la pestaña y se libera al terminar la
@@ -87,7 +87,7 @@ export function Privacidad() {
       <P>
         <strong>PixelPress no mantiene ninguna base de datos de datos personales.</strong> No existe
         tabla, archivo, caché ni índice con información que te identifique o permita identificarte: el
-        único dato personal que interviene (el archivo que cargás) se procesa localmente y nunca se
+        único dato personal que interviene (el archivo que cargas) se procesa localmente y nunca se
         persiste.
       </P>
       <P>
@@ -110,7 +110,7 @@ export function Privacidad() {
           <>
             <strong>Convertir tu archivo</strong> (finalidad exclusiva del sitio): ejecutar la
             transformación localmente y entregarte el resultado descargable. Base jurídica: medidas
-            precontractuales o ejecución del servicio solicitado por vos (art. 6.1.b RGPD) y, para la
+            precontractuales o ejecución del servicio solicitado por ti (art. 6.1.b RGPD) y, para la
             parte que depende de tu decisión expresa, tu <strong>consentimiento</strong> manifestado
             mediante la casilla de la política de privacidad (art. 6.1.a RGPD), otorgado
             libremente, específico, informado y revocable en cualquier momento.
@@ -153,12 +153,12 @@ export function Privacidad() {
 
       <H2>7. Tus derechos</H2>
       <P>
-        Podés ejercer, de forma gratuita y en cualquier momento, los derechos que reconoce el RGPD y
+        Puedes ejercer, de forma gratuita y en cualquier momento, los derechos que reconoce el RGPD y
         normativas equivalentes (CCPA/CPRA en California, LGPD en Brasil, Ley 25.326 en Argentina):
       </P>
       <UL
         items={[
-          <>acceso a los datos que tratamos sobre vos;</>,
+          <>acceso a los datos que tratamos sobre ti;</>,
           <>rectificación de datos inexactos;</>,
           <>supresión ("derecho al olvido");</>,
           <>opposición y limitación del tratamiento;</>,
@@ -175,21 +175,21 @@ export function Privacidad() {
       <H2>8. Cómo pedir que se borren tus datos</H2>
       <P>
         Por arquitectura, <strong>no queda nada que borrar de nuestro lado</strong>: nunca recibimos tu
-        archivo. Aun así, si querés dejar el sitio limpio en tu equipo, el camino es este:
+        archivo. Aun así, si quieres dejar el sitio limpio en tu equipo, el camino es este:
       </P>
       <UL
         items={[
           <>
             <strong>En tu navegador</strong>: ajustes → privacidad y seguridad → borrar datos de
-            sitios → elegí este sitio y borralo. Eso elimina cualquier resto en caché de la pestaña.
+            sitios → elige este sitio y bórralo. Eso elimina cualquier resto en caché de la pestaña.
           </>,
           <>
-            <strong>Si querés una confirmación por escrito</strong>, mandanos el pedido con el asunto
+            <strong>Si quieres una confirmación por escrito</strong>, envíanos el pedido con el asunto
             "Solicitud de eliminación de datos" a{" "}
             <a className="font-bold text-brand-ink underline" href={`mailto:${CONTACT_EMAIL}?subject=Solicitud%20de%20eliminaci%C3%B3n%20de%20datos%20-%20PixelPress`}>
               {CONTACT_EMAIL}
             </a>{" "}
-            o abrí un ticket en{" "}
+            o abre un ticket en{" "}
             <a className="font-bold text-brand-ink underline" href={ISSUES_URL} target="_blank" rel="noreferrer">
               GitHub Issues
             </a>
@@ -212,7 +212,7 @@ export function Privacidad() {
       <H2>10. Menores de edad</H2>
       <P>
         El sitio no está dirigido a menores de 16 años y no recopilamos conscientemente sus datos. Si
-        detectás que un menor ha facilitado datos, avisanos para suprimirlos.
+        detectas que un menor ha facilitado datos, avísanos para suprimirlos.
       </P>
 
       <H2>11. Seguridad</H2>
@@ -250,7 +250,7 @@ export function Terminos() {
       lead={
         <>
           Última actualización: {UPDATED}. Estos términos regulan el uso de PixelPress. Al usar el
-          sitio aceptás las condiciones descritas acá; si no estás de acuerdo, no lo uses.
+          sitio aceptas las condiciones descritas aquí; si no estás de acuerdo, no lo uses.
         </>
       }
     >
@@ -281,14 +281,14 @@ export function Terminos() {
       <P>
         Te comprometés a usar el sitio solo para fines lícitos y a no intentar: procesar malware, vulnerar
         el sitio, suplantar a terceros ni usarlo para difundir contenido ilegal. El uso es bajo tu
-        responsabilidad y la de quien comparta el archivo con vos.
+        responsabilidad y la de quien comparta el archivo contigo.
       </P>
 
       <H2>4. Tus archivos y su propiedad</H2>
       <P>
-        Sos el único dueño de los archivos que cargás. PixelPress no reclama ningún derecho sobre ellos,
+        Eres el único dueño de los archivos que cargas. PixelPress no reclama ningún derecho sobre ellos,
         no los copia, no los comparte y no los conserva: se procesan localmente y se descartan con la
-        pestaña. Podés leer cómo se tratan en la{" "}
+        pestaña. Puedes leer cómo se tratan en la{" "}
         <a className="font-bold text-brand-ink underline" href="#/privacidad">política de privacidad</a>.
       </P>
 
@@ -349,7 +349,7 @@ export function Terminos() {
         <a className="font-bold text-brand-ink underline" href={ISSUES_URL.replace("/issues", "")} target="_blank" rel="noreferrer">
           github.com/Sebas-dlt/pixelpress
         </a>
-        . Podés auditarlo, copiarlo y modificarlo bajo los términos de esa licencia.
+        . Puedes auditarlo, copiarlo y modificarlo bajo los términos de esa licencia.
       </P>
 
       <H2>9. Contacto</H2>
