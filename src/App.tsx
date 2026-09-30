@@ -298,7 +298,19 @@ export default function App() {
 
                 {status.phase === "done" && (
                   <div>
-                    <span className="block text-3xl">✅</span>
+                    <svg
+                      aria-hidden="true"
+                      viewBox="0 0 24 24"
+                      fill="none"
+                      stroke="currentColor"
+                      strokeWidth="2.5"
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                      className="mx-auto block size-9 text-brand-ink"
+                    >
+                      <circle cx="12" cy="12" r="10" />
+                      <path d="m8.5 12 2.5 2.5 4.5-5" />
+                    </svg>
                     <span className="mt-2 block truncate font-display font-bold" title={status.name}>
                       {status.name}
                     </span>
@@ -326,7 +338,20 @@ export default function App() {
 
                 {status.phase === "error" && (
                   <div role="alert">
-                    <span className="block text-3xl">⚠️</span>
+                    <svg
+                      aria-hidden="true"
+                      viewBox="0 0 24 24"
+                      fill="none"
+                      stroke="currentColor"
+                      strokeWidth="2.5"
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                      className="mx-auto block size-9 text-destructive"
+                    >
+                      <circle cx="12" cy="12" r="10" />
+                      <path d="M12 8v4.5" />
+                      <path d="M12 16h.01" />
+                    </svg>
                     <span className="mt-2 block font-display font-bold text-destructive">
                       No se pudo convertir
                     </span>
