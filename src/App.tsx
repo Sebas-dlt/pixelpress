@@ -54,19 +54,19 @@ const STATS = [
 const FAQ = [
   {
     q: "¿Se suben mis documentos?",
-    a: "No. La conversión ocurre dentro de tu navegador. No existe ningún envío ni almacenamiento en la nube.",
+    a: "No. La conversión ocurre dentro de tu pestaña: mupdf y LibreOffice corren en tu navegador y el archivo nunca sale de tu equipo. Sin servidores, sin cuentas, sin registro.",
   },
   {
     q: "¿Qué tan fiel es el resultado?",
-    a: "De PDF a Word recuperamos texto, tipografías, tamaños y alineación. De Word a PDF conservamos títulos, listas, tablas e imágenes con texto seleccionable.",
+    a: "De PDF a Word conservamos texto, tipografías, tamaños, negritas, cursivas, subrayados, alineación, listas, tablas y figuras ancladas. De Word a PDF convertimos con LibreOffice: títulos, listas, tablas e imágenes con texto seleccionable.",
   },
   {
     q: "¿Funciona sin conexión?",
-    a: "Una vez cargada la página, sí: el motor de conversión ya está en tu equipo.",
+    a: "La conversión no usa la red. Una vez cargada la pestaña puedes seguir convirtiendo sin internet, mientras el navegador la mantenga abierta o en su caché.",
   },
   {
     q: "¿Y los PDF escaneados?",
-    a: "Un PDF que solo contiene imágenes no tiene texto que recuperar; te avisamos en lugar de entregarte un Word vacío.",
+    a: "Si el PDF no tiene capa de texto no hay nada que extraer: lo detectamos y te avisamos, en lugar de entregarte un Word vacío. Tampoco convertimos archivos con contraseña ni de más de 50 MB.",
   },
 ];
 
